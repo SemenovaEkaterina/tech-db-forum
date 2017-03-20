@@ -17,6 +17,7 @@ import java.sql.*;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.Date;
 
 
 @RestController
@@ -269,13 +270,17 @@ public class ForumApi {
 
         }
 
+        java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
+
         for (int i = 0; i < request.size(); i++) {
 
             try {
 
-                curPosts = jdbcTemplate.query("INSERT INTO forum_post as p1 (author, forum, message, parent, thread, isedited)\n" +
-                                "SELECT DISTINCT u.id AS author, f.id AS forum, ?, p.id as parent, (CASE WHEN ? is null THEN t.id ELSE p.thread END) AS thread, FALSE\n" +
-                                "FROM forum_thread t\n" +
+
+
+                curPosts = jdbcTemplate.query("INSERT INTO forum_post as p1 (author, forum, message, parent, thread, isedited, created)\n" +
+                                "SELECT DISTINCT u.id AS author, f.id AS forum, ?, p.id as parent, (CASE WHEN ? is null THEN t.id ELSE p.thread END) AS thread, FALSE, ?::TIMESTAMP" +
+                                " FROM forum_thread t\n" +
                                 "LEFT JOIN forum_forum f ON (t.forum = f.id)\n" +
                                 "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
                                 "forum_user u\n" +
@@ -283,8 +288,8 @@ public class ForumApi {
                                 "(t.id = ? OR t.slug = ?::citext OR t.id IS NULL)\n" +
                                 "GROUP BY 1, 2, 3, 4, 5, 6\n" +
                                 "RETURNING p1.id, (SELECT nickname FROM forum_user WHERE id=p1.author) as author, p1.created, (SELECT slug FROM forum_forum WHERE id=p1.forum) as forum, p1.message, p1.parent, p1.thread;",
-                        new Object[]{request.get(i).getMessage(), request.get(i).getParent(), request.get(i).getParent(), request.get(i).getAuthor(), id, slug_or_id},
-                        new int[] {Types.VARCHAR, Types.INTEGER, Types.INTEGER, Types.VARCHAR, Types.INTEGER, Types.VARCHAR},
+                        new Object[]{request.get(i).getMessage(),request.get(i).getParent(), now_t, request.get(i).getParent(), request.get(i).getAuthor(), id, slug_or_id},
+                        new int[] {Types.VARCHAR, Types.INTEGER, Types.TIMESTAMP, Types.INTEGER, Types.VARCHAR, Types.INTEGER, Types.VARCHAR},
                         new BeanPropertyRowMapper(Post.class));
 
                 if (curPosts.isEmpty()) {
@@ -439,21 +444,27 @@ public class ForumApi {
                     "        JOIN forum_thread t2 ON(t2.id=p2.thread)\n" +
                     "        JOIN tree rt ON (rt.id=p2.parent)\n" +
                     ")\n" +
-                    "SELECT id, array_to_string(path, '.') as path, author, created, forum, isEdited, message, parent, thread\n" +
+                    "SELECT id, path, author, created, forum, isEdited, message, parent, thread\n" +
                     "FROM tree\n";
 
 
             if (marker != null) {
                 if (desc != null && desc) {
-                    sql += " WHERE array_to_string(path, '.') < '" + marker.toString() + "' ";
+                    sql += " WHERE path < '" + marker.toString() + "' ";
                 } else {
-                    sql += " WHERE array_to_string(path, '.') > '" + marker.toString() + "' ";
+                    sql += " WHERE path > '" + marker.toString() + "' ";
                 }
             }
 
             sql += " ORDER BY path";
 
             if (desc != null && desc) {
+                sql += " DESC";
+            }
+
+            sql += " ,1";
+
+            if (desc != null && desc == true) {
                 sql += " DESC";
             }
 
@@ -481,7 +492,7 @@ public class ForumApi {
                     "        JOIN forum_thread t2 ON(t2.id=p2.thread)\n" +
                     "        JOIN tree rt ON (rt.id=p2.parent)\n" +
                     ")\n" +
-                    "SELECT id, array_to_string(path, '.') as path, author, created, forum, isEdited, message, parent, thread, dense_rank() OVER (ORDER BY path[1]";
+                    "SELECT id, path, author, created, forum, isEdited, message, parent, thread, dense_rank() OVER (ORDER BY path[1]";
 
 
             if (desc != null && desc) {
@@ -491,9 +502,9 @@ public class ForumApi {
 
             if (marker != null) {
                 if (desc != null && desc) {
-                    sql += " WHERE array_to_string(path, '.') < '" + marker.toString() + "' ";
+                    sql += " WHERE path < '" + marker.toString() + "' ";
                 } else {
-                    sql += " WHERE array_to_string(path, '.') > '" + marker.toString() + "' ";
+                    sql += " WHERE path > '" + marker.toString() + "' ";
                 }
             }
 
@@ -503,8 +514,15 @@ public class ForumApi {
                 sql += " DESC";
             }
 
+            sql += " ,1";
+
+            if (desc != null && desc == true) {
+                sql += " DESC";
+            }
+
+
             if (limit != null) {
-                sql = "SELECT * FROM (" + sql + ") as req  WHERE rank <= '" + limit.toString() + "'";
+                sql = "SELECT * FROM (" + sql + ") as req  WHERE rank <= " + limit.toString();
             }
             sql += ";";
 

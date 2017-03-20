@@ -13,7 +13,6 @@ import java.sql.Timestamp;
 import java.sql.Time;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
-import java.time.format.DateTimeFormatter;
 import java.util.Date;
 
 /**
@@ -87,7 +86,7 @@ public class ThreadData {
         return fmt.format(created);
     }
 
-    public Date getDateCreated() {
+    public Timestamp getDateCreated() {
         return created;
     }
 

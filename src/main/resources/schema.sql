@@ -1,4 +1,4 @@
-CREATE EXTENSION citext;
+CREATE EXTENSION IF NOT EXISTS citext;
 
 CREATE TABLE IF NOT EXISTS forum_user (
     id SERIAL PRIMARY KEY,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS forum_vote (
 CREATE TABLE IF NOT EXISTS forum_post (
     id SERIAL PRIMARY KEY,
     author integer NOT NULL REFERENCES forum_user(id),
-    created timestamp with time zone DEFAULT now(),
+    created timestamp with time zone,
     forum integer NOT NULL REFERENCES forum_forum(id),
     isedited boolean DEFAULT false NOT NULL,
     message character varying NOT NULL,
