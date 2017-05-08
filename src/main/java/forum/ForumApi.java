@@ -272,24 +272,29 @@ public class ForumApi {
 
         java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
 
+
         for (int i = 0; i < request.size(); i++) {
 
             try {
 
 
 
-                curPosts = jdbcTemplate.query("INSERT INTO forum_post as p1 (author, forum, message, parent, thread, isedited, created)\n" +
-                                "SELECT DISTINCT u.id AS author, f.id AS forum, ?, p.id as parent, (CASE WHEN ? is null THEN t.id ELSE p.thread END) AS thread, FALSE, ?::TIMESTAMP" +
+                curPosts = jdbcTemplate.query(
+
+                        "WITH req as (" +
+                                "SELECT u.id AS author, f.id AS forum, ? as message, p.id as parent, (CASE WHEN ? is null THEN t.id ELSE p.thread END) AS thread, FALSE as isedited, ?::TIMESTAMP as created, u.nickname as nickname, f.slug as slug" +
                                 " FROM forum_thread t\n" +
                                 "LEFT JOIN forum_forum f ON (t.forum = f.id)\n" +
                                 "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
                                 "forum_user u\n" +
-                                "WHERE (u.nickname = ?::citext OR u.nickname IS NULL) AND\n" +
-                                "(t.id = ? OR t.slug = ?::citext OR t.id IS NULL)\n" +
-                                "GROUP BY 1, 2, 3, 4, 5, 6\n" +
-                                "RETURNING p1.id, (SELECT nickname FROM forum_user WHERE id=p1.author) as author, p1.created, (SELECT slug FROM forum_forum WHERE id=p1.forum) as forum, p1.message, p1.parent, p1.thread;",
-                        new Object[]{request.get(i).getMessage(),request.get(i).getParent(), now_t, request.get(i).getParent(), request.get(i).getAuthor(), id, slug_or_id},
-                        new int[] {Types.VARCHAR, Types.INTEGER, Types.TIMESTAMP, Types.INTEGER, Types.VARCHAR, Types.INTEGER, Types.VARCHAR},
+                                "WHERE (u.nickname = ?::citext) AND\n" +
+                                "((? is not NULL AND t.id = ?) OR (? is not NULL AND t.slug=?::citext))\n" +
+                                ") \n" +
+                                "INSERT INTO forum_post as p1 (author, forum, message, parent, thread, isedited, created)\n" +
+                                "SELECT author, forum, message, parent, thread, isedited, created FROM req\n" +
+                                "RETURNING p1.id, (SELECT nickname FROM req), p1.created, (SELECT slug FROM req), p1.message, p1.parent, p1.thread;",
+                        new Object[]{request.get(i).getMessage(),request.get(i).getParent(), now_t, request.get(i).getParent(), request.get(i).getAuthor(), id, id, slug_or_id, slug_or_id},
+                        new int[] {Types.VARCHAR, Types.INTEGER, Types.TIMESTAMP, Types.INTEGER, Types.VARCHAR, Types.INTEGER, Types.INTEGER, Types.VARCHAR, Types.VARCHAR},
                         new BeanPropertyRowMapper(Post.class));
 
                 if (curPosts.isEmpty()) {
@@ -304,6 +309,7 @@ public class ForumApi {
             }
 
         }
+
 
 
 
