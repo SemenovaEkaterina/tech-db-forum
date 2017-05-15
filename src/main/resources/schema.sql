@@ -45,4 +45,3 @@ CREATE TABLE IF NOT EXISTS forum_post (
 
 CREATE INDEX IF NOT EXISTS idx_forum_thread_id ON forum_thread(id);
 CREATE INDEX IF NOT EXISTS idx_forum_forum_id_slug ON forum_forum(id, citext(slug));
-CREATE INDEX IF NOT EXISTS idx_forum_user_nickname ON forum_user(citext(nickname));

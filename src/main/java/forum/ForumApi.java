@@ -9,9 +9,11 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.BeanPropertyRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import javax.sql.DataSource;
 import java.io.IOException;
 import java.sql.*;
 import java.text.ParseException;
@@ -44,7 +46,7 @@ public class ForumApi {
     public ResponseEntity createUser(@RequestBody UserData body, @PathVariable String nickname) {
 
         try {
-            jdbcTemplate.update("INSERT INTO forum_user (about, email, fullname, nickname) VALUES (?, ?, ?, ?::citext);",
+            jdbcTemplate.update("INSERT INTO forum_user (id, about, email, fullname, nickname) VALUES (DEFAULT, ?, ?, ?, ?::citext);",
                     new Object[]{body.getAbout(), body.getEmail(), body.getFullname(), nickname},
                     new int[]{Types.VARCHAR, Types.VARCHAR, Types.VARCHAR, Types.VARCHAR});
 
@@ -272,51 +274,95 @@ public class ForumApi {
 
         java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
 
+        try {
+            List<Integer> ids = jdbcTemplate.queryForList("SELECT nextval('forum_post_id_seq') from generate_series(1,?);",
+                    new Object[]{request.size()},
+                    Integer.class);
 
-        for (int i = 0; i < request.size(); i++) {
-
-            try {
+            System.out.println(ids.get(0));
 
 
+            DataSource src = jdbcTemplate.getDataSource();
+            Connection c = src.getConnection();
 
-                curPosts = jdbcTemplate.query(
+            String query = "INSERT INTO forum_post as p1 (id, author, forum, message, parent, thread, isedited, created)" +
+                    "SELECT ?, u.id, t.forum, ?, p.id, (CASE WHEN ? is null THEN t.id ELSE p.thread END), FALSE, ?::TIMESTAMP" +
+                    " FROM forum_thread t\n" +
+                    "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
+                    "forum_user u\n" +
+                    "WHERE (u.nickname = ?::citext) AND\n" +
+                    "(t.id = ? OR t.slug=?::citext)";
 
-                        "WITH req as (" +
-                                "SELECT u.id AS author, f.id AS forum, ? as message, p.id as parent, (CASE WHEN ? is null THEN t.id ELSE p.thread END) AS thread, FALSE as isedited, ?::TIMESTAMP as created, u.nickname as nickname, f.slug as slug" +
-                                " FROM forum_thread t\n" +
-                                "LEFT JOIN forum_forum f ON (t.forum = f.id)\n" +
-                                "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
-                                "forum_user u\n" +
-                                "WHERE (u.nickname = ?::citext) AND\n" +
-                                "((? is not NULL AND t.id = ?) OR (? is not NULL AND t.slug=?::citext))\n" +
-                                ") \n" +
-                                "INSERT INTO forum_post as p1 (author, forum, message, parent, thread, isedited, created)\n" +
-                                "SELECT author, forum, message, parent, thread, isedited, created FROM req\n" +
-                                "RETURNING p1.id, (SELECT nickname FROM req), p1.created, (SELECT slug FROM req), p1.message, p1.parent, p1.thread;",
-                        new Object[]{request.get(i).getMessage(),request.get(i).getParent(), now_t, request.get(i).getParent(), request.get(i).getAuthor(), id, id, slug_or_id, slug_or_id},
-                        new int[] {Types.VARCHAR, Types.INTEGER, Types.TIMESTAMP, Types.INTEGER, Types.VARCHAR, Types.INTEGER, Types.INTEGER, Types.VARCHAR, Types.VARCHAR},
-                        new BeanPropertyRowMapper(Post.class));
 
-                if (curPosts.isEmpty()) {
-                    return ResponseEntity.status(404)
-                            .body(null);
+            PreparedStatement pStatement = c.prepareStatement(query, Statement.NO_GENERATED_KEYS);
+            int batchSize = 100;
+
+            for (int count = 0; count < request.size(); count++) {
+                pStatement.setString(2, request.get(count).getMessage());
+                if (request.get(count).getParent() == null) {
+                    pStatement.setNull(3, java.sql.Types.INTEGER);
+                    pStatement.setNull(5, java.sql.Types.INTEGER);
                 }
-                posts.add(curPosts.get(0));
+                else {
+                    pStatement.setInt(3, request.get(count).getParent());
+                    pStatement.setInt(5, request.get(count).getParent());
+                }
+                pStatement.setTimestamp(4, now_t);
+                pStatement.setString(6, request.get(count).getAuthor());
+                if (id == null) {
+                    pStatement.setNull(7, java.sql.Types.INTEGER);
+                }
+                else {
+                    pStatement.setInt(7, id);
+                }
+                if (slug_or_id == null) {
+                    pStatement.setNull(8, java.sql.Types.INTEGER);
+                }
+                else {
+                    pStatement.setString(8, slug_or_id);
+                }
+                pStatement.setInt(1, ids.get(count));
+
+                pStatement.addBatch();
             }
-            catch (DataIntegrityViolationException e) {
-                return ResponseEntity.status(409)
+            pStatement.executeBatch();
+            c.close();
+
+
+            NamedParameterJdbcTemplate namedParameterJdbcTemplate = new NamedParameterJdbcTemplate(jdbcTemplate.getDataSource());
+            String sql = "SELECT p.id, u.nickname as author, f.slug as forum, p.message, p.thread, p.isedited, p.created, p.parent\n" +
+                    "FROM forum_post p\n" +
+                    "LEFT JOIN forum_user u ON (u.id = p.author)\n" +
+                    "LEFT JOIN forum_forum f ON (f.id = p.forum)\n" +
+                    "WHERE p.id IN (:ids)\n" +
+                    "ORDER BY p.id;";
+            Map idsMap = Collections.singletonMap("ids", ids);
+
+
+            curPosts = namedParameterJdbcTemplate.query(sql, idsMap,
+                    new BeanPropertyRowMapper(Post.class));
+
+
+            if (curPosts.size() < request.size()) {
+                return ResponseEntity.status(404)
                         .body(null);
             }
 
         }
+        catch (DataIntegrityViolationException e) {
+            return ResponseEntity.status(409)
+                    .body(null);
+        }
+        catch (SQLException e) {
+            System.out.println(e);
+            return ResponseEntity.status(409)
+                    .body(null);
+        }
 
+        PostData postDatas[] = new PostData[curPosts.size()];
 
-
-
-        PostData postDatas[] = new PostData[posts.size()];
-
-        for (int i = 0; i < posts.size(); i++) {
-            postDatas[i] = new PostData(posts.get(i));
+        for (int i = 0; i < curPosts.size(); i++) {
+            postDatas[i] = new PostData(curPosts.get(i));
         }
 
         return ResponseEntity.status(201)
@@ -337,15 +383,21 @@ public class ForumApi {
         }
 
         try {
-            jdbcTemplate.query("WITH req1 as (SELECT u.id as id FROM forum_user u WHERE u.nickname=?::citext), " +
-                            "req2 as (SELECT t.id as id FROM forum_thread t WHERE t.id = ? OR slug=?::citext)" +
-                            " INSERT INTO forum_vote as v (nickname, voice, thread)" +
-                            " VALUES ((SELECT id FROM req1), ?, (SELECT id FROM req2))" +
+            List<Vote> votes = jdbcTemplate.query("INSERT INTO forum_vote as v (nickname, voice, thread)" +
+                            " SELECT u.id, ?, t.id FROM" +
+                            " forum_user u," +
+                            " forum_thread t" +
+                            " WHERE u.nickname=?::citext AND (t.id = ? OR t.slug=?::citext)" +
                             " ON CONFLICT (nickname, thread)" +
                             " DO UPDATE SET voice = ?" +
                             " RETURNING *;",
-                    new Object[]{body.getNickname(), id, slug_or_id, body.getVoice(), body.getVoice()},
+                    new Object[]{body.getVoice(), body.getNickname(), id, slug_or_id, body.getVoice()},
                     new BeanPropertyRowMapper(Vote.class));
+
+            if (votes.isEmpty()) {
+                return ResponseEntity.status(404)
+                        .body("Not found");
+            }
 
             List<Thread> threads =  jdbcTemplate.query("SELECT u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.slug, t.title, SUM(COALESCE(v.voice, 0)) as votes" +
                             " FROM forum_thread t" +
