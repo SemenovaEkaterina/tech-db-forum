@@ -115,23 +115,12 @@ public class ForumApi {
 
     @GetMapping(path = "/api/forum/{slug}/details", produces="application/json")
     public ResponseEntity getForum(@PathVariable String slug) {
-        List<Forum> forums = jdbcTemplate.query("WITH req1 as (\n" +
-                        "    SELECT COUNT(t.id) as threads\n" +
-                        "    FROM forum_forum f\n" +
-                        "    JOIN forum_thread t ON(t.forum=f.id)\n " +
-                        "    WHERE f.slug=?::citext " +
-                        "),\n" +
-                        "    req2 as (\n" +
-                        "    SELECT COUNT(p.id) as posts\n" +
-                        "    FROM forum_forum f\n" +
-                        "    JOIN forum_post p ON(p.forum=f.id)\n" +
-                        "    WHERE f.slug=?::citext " +
-                        "    )\n" +
-                        "SELECT f.id, f.slug, f.title, u.nickname as user, (SELECT threads from req1), (SELECT posts FROM req2)\n" +
+        List<Forum> forums = jdbcTemplate.query("SELECT f.id, f.slug, f.title, u.nickname as user, (CASE WHEN s.threads is null THEN 0 ELSE s.threads END), (CASE WHEN s.posts is null THEN 0 ELSE s.posts END)\n" +
                         "FROM forum_forum f \n" +
                         "JOIN forum_user u ON(f.forum_user=u.id)\n" +
+                        "LEFT JOIN forum_stat s ON(f.id=s.forum_id)\n" +
                         "WHERE slug=?::citext;",
-                new Object[]{slug, slug, slug},
+                new Object[]{slug},
                 new BeanPropertyRowMapper(Forum.class));
 
         if (forums.isEmpty()) {
@@ -200,8 +189,11 @@ public class ForumApi {
         }
 
 
-        String sql = "SELECT u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.slug, t.title " +
-                "FROM forum_thread t JOIN forum_forum f ON (t.forum=f.id) JOIN forum_user u ON (t.author=u.id) " +
+        String sql = "SELECT u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.slug, t.title, SUM(COALESCE(v.voice, 0)) as votes " +
+                "FROM forum_thread t" +
+                " JOIN forum_forum f ON (t.forum=f.id)" +
+                " JOIN forum_user u ON (t.author=u.id) " +
+                " LEFT JOIN forum_vote v ON (t.id=v.thread)" +
                 "WHERE f.slug=?::citext ";
 
         if (since != null) {
@@ -213,7 +205,9 @@ public class ForumApi {
             }
         }
 
+        sql += " GROUP BY 1,2,3,4,5,6,7";
         sql += "ORDER BY t.created";
+
 
         if (desc != null && desc == true) {
             sql += " DESC";
@@ -285,8 +279,8 @@ public class ForumApi {
             DataSource src = jdbcTemplate.getDataSource();
             Connection c = src.getConnection();
 
-            String query = "INSERT INTO forum_post as p1 (id, author, forum, message, parent, thread, isedited, created)" +
-                    "SELECT ?, u.id, t.forum, ?, p.id, (CASE WHEN ? is null THEN t.id ELSE p.thread END), FALSE, ?::TIMESTAMP" +
+            String query = "INSERT INTO forum_post as p1 (id, author, forum, message, parent, thread, isedited, created, path)" +
+                    "SELECT ?, u.id, t.forum, ?, p.id, (CASE WHEN ? is null THEN t.id ELSE p.thread END), FALSE, ?::TIMESTAMP, array_append(p.path, ?)" +
                     " FROM forum_thread t\n" +
                     "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
                     "forum_user u\n" +
@@ -295,33 +289,33 @@ public class ForumApi {
 
 
             PreparedStatement pStatement = c.prepareStatement(query, Statement.NO_GENERATED_KEYS);
-            int batchSize = 100;
 
             for (int count = 0; count < request.size(); count++) {
                 pStatement.setString(2, request.get(count).getMessage());
                 if (request.get(count).getParent() == null) {
                     pStatement.setNull(3, java.sql.Types.INTEGER);
-                    pStatement.setNull(5, java.sql.Types.INTEGER);
+                    pStatement.setNull(6, java.sql.Types.INTEGER);
                 }
                 else {
                     pStatement.setInt(3, request.get(count).getParent());
-                    pStatement.setInt(5, request.get(count).getParent());
+                    pStatement.setInt(6, request.get(count).getParent());
                 }
                 pStatement.setTimestamp(4, now_t);
-                pStatement.setString(6, request.get(count).getAuthor());
+                pStatement.setString(7, request.get(count).getAuthor());
                 if (id == null) {
-                    pStatement.setNull(7, java.sql.Types.INTEGER);
-                }
-                else {
-                    pStatement.setInt(7, id);
-                }
-                if (slug_or_id == null) {
                     pStatement.setNull(8, java.sql.Types.INTEGER);
                 }
                 else {
-                    pStatement.setString(8, slug_or_id);
+                    pStatement.setInt(8, id);
+                }
+                if (slug_or_id == null) {
+                    pStatement.setNull(9, java.sql.Types.INTEGER);
+                }
+                else {
+                    pStatement.setString(9, slug_or_id);
                 }
                 pStatement.setInt(1, ids.get(count));
+                pStatement.setInt(5, ids.get(count));
 
                 pStatement.addBatch();
             }
@@ -487,30 +481,19 @@ public class ForumApi {
         }
 
         if (sort != null && sort.equals("tree")) {
-            sql = "WITH RECURSIVE tree (path, author, created, forum, id, isEdited, message, parent, thread) AS (\n" +
-                    "        SELECT array[p.id], u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.parent, p.thread\n" +
-                    "        FROM forum_post p\n" +
-                    "        JOIN forum_user u ON(p.author=u.id)\n" +
-                    "        JOIN forum_forum f ON(f.id=p.forum)\n" +
-                    "        JOIN forum_thread t ON(t.id=p.thread)\n" +
-                    "        WHERE (t.id=? OR t.slug=?::citext) AND p.parent ISNULL\n" +
-                    "    UNION ALL\n" +
-                    "        SELECT array_append(rt.path, p2.id), u2.nickname as author, p2.created, f2.slug as forum, p2.id, p2.isEdited, p2.message, p2.parent, p2.thread\n" +
-                    "        FROM forum_post p2\n" +
-                    "        JOIN forum_user u2 ON(p2.author=u2.id)\n" +
-                    "        JOIN forum_forum f2 ON(f2.id=p2.forum)\n" +
-                    "        JOIN forum_thread t2 ON(t2.id=p2.thread)\n" +
-                    "        JOIN tree rt ON (rt.id=p2.parent)\n" +
-                    ")\n" +
-                    "SELECT id, path, author, created, forum, isEdited, message, parent, thread\n" +
-                    "FROM tree\n";
+            sql = "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread\n" +
+                    "FROM forum_post p\n" +
+                    "JOIN forum_thread t ON (t.id = p.thread)\n" +
+                    "JOIN forum_user u ON (u.id = p.author)\n" +
+                    "JOIN forum_forum f ON (f.id = p.forum)" +
+                    "WHERE (t.id=? OR t.slug=?::citext) \n";
 
 
             if (marker != null) {
                 if (desc != null && desc) {
-                    sql += " WHERE path < '" + marker.toString() + "' ";
+                    sql += " AND path < '" + marker.toString() + "' ";
                 } else {
-                    sql += " WHERE path > '" + marker.toString() + "' ";
+                    sql += " AND path > '" + marker.toString() + "' ";
                 }
             }
 
@@ -535,34 +518,25 @@ public class ForumApi {
 
         if (sort != null && sort.equals("parent_tree")) {
 
-            sql = "WITH RECURSIVE tree (path, author, created, forum, id, isEdited, message, parent, thread) AS (\n" +
-                    "        SELECT array[p.id], u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.parent, p.thread\n" +
-                    "        FROM forum_post p\n" +
-                    "        JOIN forum_user u ON(p.author=u.id)\n" +
-                    "        JOIN forum_forum f ON(f.id=p.forum)\n" +
-                    "        JOIN forum_thread t ON(t.id=p.thread)\n" +
-                    "        WHERE (t.id=? OR t.slug=?::citext) AND p.parent ISNULL\n" +
-                    "    UNION ALL\n" +
-                    "        SELECT array_append(rt.path, p2.id), u2.nickname as author, p2.created, f2.slug as forum, p2.id, p2.isEdited, p2.message, p2.parent, p2.thread\n" +
-                    "        FROM forum_post p2\n" +
-                    "        JOIN forum_user u2 ON(p2.author=u2.id)\n" +
-                    "        JOIN forum_forum f2 ON(f2.id=p2.forum)\n" +
-                    "        JOIN forum_thread t2 ON(t2.id=p2.thread)\n" +
-                    "        JOIN tree rt ON (rt.id=p2.parent)\n" +
-                    ")\n" +
-                    "SELECT id, path, author, created, forum, isEdited, message, parent, thread, dense_rank() OVER (ORDER BY path[1]";
-
+            sql = "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread, dense_rank() OVER (ORDER BY path[1]\n";
 
             if (desc != null && desc) {
                 sql += " DESC";
             }
-            sql += ") AS rank FROM tree\n";
+            sql += ") AS rank\n";
+
+            sql += "FROM forum_post p\n" +
+                    "JOIN forum_thread t ON (t.id = p.thread)\n" +
+                    "JOIN forum_user u ON (u.id = p.author)\n" +
+                    "JOIN forum_forum f ON (f.id = p.forum)" +
+                    "WHERE (t.id=? OR t.slug=?::citext) \n";
+
 
             if (marker != null) {
                 if (desc != null && desc) {
-                    sql += " WHERE path < '" + marker.toString() + "' ";
+                    sql += " AND path < '" + marker.toString() + "' ";
                 } else {
-                    sql += " WHERE path > '" + marker.toString() + "' ";
+                    sql += " AND path > '" + marker.toString() + "' ";
                 }
             }
 
@@ -589,9 +563,9 @@ public class ForumApi {
         if (sort != null && sort.equals("flat")) {
             sql = "SELECT u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.parent, p.thread" +
                     " FROM forum_post p" +
-                    " JOIN forum_user u ON(p.author=u.id)" +
-                    " JOIN forum_forum f ON(f.id=p.forum)" +
                     " JOIN forum_thread t ON(t.id=p.thread)" +
+                    " JOIN forum_forum f ON(f.id=p.forum)" +
+                    " JOIN forum_user u ON(p.author=u.id)" +
                     " WHERE (t.id=? OR t.slug=?::citext)";
 
             if (marker != null) {
@@ -653,6 +627,16 @@ public class ForumApi {
     public ResponseEntity clear() {
         jdbcTemplate.update("TRUNCATE TABLE forum_user CASCADE;",
                 new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_forum CASCADE;",
+                new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_thread CASCADE;",
+                new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_post CASCADE;",
+                new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_vote CASCADE;",
+                new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_stat CASCADE;",
+                new Object[]{});
 
         return ResponseEntity.status(200)
                 .body(null);
@@ -671,13 +655,11 @@ public class ForumApi {
             id = null;
         }
 
-        List<Thread> threads = jdbcTemplate.query("UPDATE forum_thread t1\n" +
-                        "SET message = COALESCE(?, t.message), title = COALESCE(?, t.title)\n" +
-                        "FROM forum_thread t\n" +
-                        "JOIN forum_forum f ON(f.id=t.forum)\n" +
-                        "JOIN forum_user u ON(u.id=t.author)\n" +
-                        "WHERE t.id=? OR t.slug=?::citext\n" +
-                        "RETURNING u.nickname as author, t.created, f.slug as forum, t.id, t1.message, t.slug, t1.title;",
+        List<Thread> threads = jdbcTemplate.query("UPDATE forum_thread t\n" +
+                        "SET message = COALESCE(?, message), title = COALESCE(?, t.title)\n" +
+                        "FROM forum_forum f, forum_user u\n" +
+                        "WHERE (t.id=? OR t.slug=?::citext) AND f.id=t.forum AND u.id=t.author\n" +
+                        "RETURNING u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.slug, t.title;",
                 new Object[]{body.getMessage(), body.getTitle(), id, slug_or_id},
                 new BeanPropertyRowMapper(Thread.class));
 
@@ -704,26 +686,18 @@ public class ForumApi {
                     .body("Not found");
         }
 
-        String sql = "SELECT * FROM (\n" +
-                "    SELECT DISTINCT u.*\n" +
-                "    FROM forum_user u\n" +
-                "        JOIN forum_thread t ON (t.author = u.id)\n" +
-                "        JOIN forum_forum f ON (f.id = t.forum)\n" +
-                "    WHERE f.slug = ?::citext\n" +
-                "    UNION\n" +
-                "    SELECT DISTINCT u.*\n" +
-                "    FROM forum_user u\n" +
-                "        JOIN forum_post p ON (p.author = u.id)\n" +
-                "        JOIN forum_forum f ON (f.id = p.forum)\n" +
-                "    WHERE f.slug = ?::citext\n" +
-                ") as req\n";
+        String sql = "SELECT u.*\n" +
+                "FROM forum_user u\n" +
+                "WHERE u.id in (SELECT user_id FROM forum_f_u \n" +
+                "               JOIN forum_forum ON (id=forum_id)\n" +
+                "               WHERE slug = ?::citext)";
 
         if (since != null) {
             if (desc != null && desc) {
-                sql += " WHERE nickname < '" + since + "'\n";
+                sql += " AND nickname < '" + since + "'\n";
             }
             else {
-                sql += " WHERE nickname > '" + since + "'\n";
+                sql += " AND nickname > '" + since + "'\n";
             }
         }
 
@@ -740,7 +714,7 @@ public class ForumApi {
         sql += ";";
 
         List<User> users = jdbcTemplate.query(sql,
-                new Object[]{slug, slug},
+                new Object[]{slug},
                 new BeanPropertyRowMapper(User.class));
 
         return ResponseEntity.status(200)
@@ -752,7 +726,7 @@ public class ForumApi {
 
         DetailPostData detailPostData = new DetailPostData();
 
-        String sql = "SELECT u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.thread FROM forum_post p\n" +
+        String sql = "SELECT u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.thread, p.parent FROM forum_post p\n" +
                 "JOIN forum_user u ON(u.id=p.author)\n" +
                 "JOIN forum_forum f ON(f.id=p.forum)\n" +
                 "WHERE p.id=?;";
@@ -781,12 +755,14 @@ public class ForumApi {
         }
 
         if (related != null && related.contains("thread")) {
-            List<Thread> threads = jdbcTemplate.query("SELECT u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.title, t.slug" +
+            List<Thread> threads = jdbcTemplate.query("SELECT u.nickname as author, t.created, f.slug as forum, t.id, t.message, t.title, t.slug, SUM(COALESCE(v.voice, 0)) as votes" +
                             " FROM forum_thread t" +
                             " JOIN forum_user u ON(t.author=u.id)" +
                             " JOIN forum_forum f ON(f.id=t.forum)" +
                             " JOIN forum_post p ON(p.thread=t.id)" +
-                            " WHERE p.id=?",
+                            "  LEFT JOIN forum_vote v ON (t.id=v.thread)" +
+                            " WHERE p.id=?\n" +
+                            " GROUP BY 1,2,3,4,5,6,7",
                     new Object[]{id},
                     new BeanPropertyRowMapper(Thread.class));
 
@@ -796,24 +772,13 @@ public class ForumApi {
         }
 
         if (related != null && related.contains("forum")) {
-            sql = "WITH req1 as (\n" +
-                    "    SELECT COUNT(t.id) as threads\n" +
-                    "    FROM forum_forum f\n" +
-                    "    JOIN forum_thread t ON(t.forum=f.id)\n " +
-                    "    WHERE f.slug=?::citext " +
-                    "),\n" +
-                    "    req2 as (\n" +
-                    "    SELECT COUNT(p.id) as posts\n" +
-                    "    FROM forum_forum f\n" +
-                    "    JOIN forum_post p ON(p.forum=f.id)\n" +
-                    "    WHERE f.slug=?::citext " +
-                    "    )\n" +
-                    "SELECT f.id, f.slug, f.title, u.nickname as user, (SELECT threads from req1), (SELECT posts FROM req2)\n" +
+            sql = "SELECT f.id, f.slug, f.title, u.nickname as user, (CASE WHEN s.threads is null THEN 0 ELSE s.threads END), (CASE WHEN s.posts is null THEN 0 ELSE s.posts END)\n" +
                     "FROM forum_forum f \n" +
                     "JOIN forum_user u ON(f.forum_user=u.id)\n" +
+                    "JOIN forum_stat s ON(s.forum_id=f.id)\n" +
                     "WHERE slug=?::citext;";
             List<Forum> forums = jdbcTemplate.query(sql,
-                    new Object[]{posts.get(0).getForum(), posts.get(0).getForum(), posts.get(0).getForum()},
+                    new Object[]{posts.get(0).getForum()},
                     new BeanPropertyRowMapper(Forum.class));
 
 
@@ -829,13 +794,11 @@ public class ForumApi {
     @PostMapping(path = "/api/post/{id}/details", produces="application/json")
     public ResponseEntity changePost(@PathVariable Integer id, @RequestBody PostData body) {
 
-        String sql = "UPDATE forum_post p1\n" +
-                "SET message=COALESCE(?, p.message), isedited=(CASE WHEN ?::citext<>p.message THEN true ELSE false END)\n" +
-                "FROM forum_post p\n" +
-                "JOIN forum_user u ON(u.id=p.author)\n" +
-                "JOIN forum_forum f ON(f.id=p.forum)\n" +
-                "WHERE p.id=?\n" +
-                "RETURNING u.nickname as author, p.created, f.slug as forum, p.id, p1.isedited, p1.message, p.thread;";
+        String sql = "UPDATE forum_post p\n" +
+                "SET isedited=(CASE WHEN ?::citext<>message THEN true ELSE false END), message=COALESCE(?::citext, message)\n" +
+                "FROM forum_user u, forum_forum f\n" +
+                "WHERE p.id=? AND u.id=p.author AND f.id=p.forum\n" +
+                "RETURNING u.nickname as author, p.created, f.slug as forum, p.id, p.isedited, p.message, p.thread;";
 
 
         List<Post> posts = jdbcTemplate.query(sql,
