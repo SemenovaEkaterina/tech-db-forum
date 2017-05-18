@@ -348,7 +348,6 @@ public class ForumApi {
                     .body(null);
         }
         catch (SQLException e) {
-            System.out.println(e);
             return ResponseEntity.status(409)
                     .body(null);
         }
@@ -481,13 +480,11 @@ public class ForumApi {
         }
 
         if (sort != null && sort.equals("tree")) {
-            sql = "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread\n" +
-                    "FROM forum_post p\n" +
-                    "JOIN forum_thread t ON (t.id = p.thread)\n" +
-                    "JOIN forum_user u ON (u.id = p.author)\n" +
-                    "JOIN forum_forum f ON (f.id = p.forum)" +
-                    "WHERE (t.id=? OR t.slug=?::citext) \n";
-
+            sql = "WITH req as (\n" +
+                    "    SELECT p.id as post\n" +
+                    "\tFROM forum_post p\n" +
+                    "\tJOIN forum_thread t ON(t.id=p.thread)\n" +
+                    "\tWHERE (t.id=? OR t.slug=?::citext) ";
 
             if (marker != null) {
                 if (desc != null && desc) {
@@ -497,99 +494,109 @@ public class ForumApi {
                 }
             }
 
-            sql += " ORDER BY path";
+            sql += "    ORDER BY path\n";
 
             if (desc != null && desc) {
                 sql += " DESC";
             }
 
-            sql += " ,1";
+            if (limit != null) {
+                sql += "\tLIMIT " + limit.toString();
+            }
+
+            sql += ")\n" +
+                    "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread\n" +
+                    "FROM req\n" +
+                    "JOIN forum_post p ON (p.id=req.post)\n" +
+                    "JOIN forum_user u ON (p.author=u.id)\n" +
+                    "JOIN forum_forum f ON (p.forum=f.id)\n" +
+                    "ORDER BY path";
 
             if (desc != null && desc == true) {
                 sql += " DESC";
-            }
-
-            if (limit != null) {
-                sql += " LIMIT " + limit.toString();
             }
 
             sql += ";";
         }
 
         if (sort != null && sort.equals("parent_tree")) {
-
-            sql = "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread, dense_rank() OVER (ORDER BY path[1]\n";
-
-            if (desc != null && desc) {
-                sql += " DESC";
-            }
-            sql += ") AS rank\n";
-
-            sql += "FROM forum_post p\n" +
-                    "JOIN forum_thread t ON (t.id = p.thread)\n" +
-                    "JOIN forum_user u ON (u.id = p.author)\n" +
-                    "JOIN forum_forum f ON (f.id = p.forum)" +
-                    "WHERE (t.id=? OR t.slug=?::citext) \n";
-
+            sql = "WITH req as (\n" +
+                    "    SELECT p.id as par\n" +
+                    "\tFROM forum_post p\n" +
+                    "\tJOIN forum_thread t ON(t.id=p.thread)\n" +
+                    "\tWHERE (t.id=? OR t.slug=?::citext) AND parent is NULL";
 
             if (marker != null) {
                 if (desc != null && desc) {
-                    sql += " AND path < '" + marker.toString() + "' ";
-                } else {
-                    sql += " AND path > '" + marker.toString() + "' ";
-                }
-            }
 
-            sql += " ORDER BY 2";
-
-            if (desc != null && desc == true) {
-                sql += " DESC";
-            }
-
-            sql += " ,1";
-
-            if (desc != null && desc == true) {
-                sql += " DESC";
-            }
-
-
-            if (limit != null) {
-                sql = "SELECT * FROM (" + sql + ") as req  WHERE rank <= " + limit.toString();
-            }
-            sql += ";";
-
-        }
-
-        if (sort != null && sort.equals("flat")) {
-            sql = "SELECT u.nickname as author, p.created, f.slug as forum, p.id, p.isEdited, p.message, p.parent, p.thread" +
-                    " FROM forum_post p" +
-                    " JOIN forum_thread t ON(t.id=p.thread)" +
-                    " JOIN forum_forum f ON(f.id=p.forum)" +
-                    " JOIN forum_user u ON(p.author=u.id)" +
-                    " WHERE (t.id=? OR t.slug=?::citext)";
-
-            if (marker != null) {
-                if (desc != null && desc) {
                     sql += " AND p.id < " + marker.toString() + " ";
                 } else {
                     sql += " AND p.id > " + marker.toString() + " ";
                 }
             }
 
-            sql += " ORDER BY 2";
+            sql += "    ORDER BY 1\n";
 
-            if (desc != null && desc == true) {
-                sql += " DESC";
-            }
-
-            sql += ", 4";
-
-            if (desc != null && desc == true) {
+            if (desc != null && desc) {
                 sql += " DESC";
             }
 
             if (limit != null) {
-                sql += " LIMIT " + limit.toString();
+                sql += "\tLIMIT " + limit.toString();
+            }
+
+            sql += ")\n" +
+                    "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread\n" +
+                    "FROM req\n" +
+                    "JOIN forum_post p ON (p.path[1]=req.par)\n" +
+                    "JOIN forum_user u ON (p.author=u.id)\n" +
+                    "JOIN forum_forum f ON (p.forum=f.id)\n" +
+                    "ORDER BY path";
+
+            if (desc != null && desc == true) {
+                sql += " DESC";
+            }
+
+            sql += ";";
+        }
+
+        if (sort != null && sort.equals("flat")) {
+
+            sql = "WITH req as (\n" +
+                    "    SELECT p.id as post\n" +
+                    "\tFROM forum_post p\n" +
+                    "\tJOIN forum_thread t ON(t.id=p.thread)\n" +
+                    "\tWHERE (t.id=? OR t.slug=?::citext) ";
+
+            if (marker != null) {
+                if (desc != null && desc) {
+
+                    sql += " AND p.id < " + marker.toString() + " ";
+                } else {
+                    sql += " AND p.id > " + marker.toString() + " ";
+                }
+            }
+
+            sql += "    ORDER BY 1\n";
+
+            if (desc != null && desc) {
+                sql += " DESC";
+            }
+
+            if (limit != null) {
+                sql += "\tLIMIT " + limit.toString();
+            }
+
+            sql += ")\n" +
+                    "SELECT p.id, path, u.nickname as author, p.created, f.slug as forum, isEdited, p.message, parent, thread\n" +
+                    "FROM req\n" +
+                    "JOIN forum_post p ON (p.id=req.post)\n" +
+                    "JOIN forum_user u ON (p.author=u.id)\n" +
+                    "JOIN forum_forum f ON (p.forum=f.id)\n" +
+                    "ORDER BY 1";
+
+            if (desc != null && desc == true) {
+                sql += " DESC";
             }
 
             sql += ";";
@@ -614,7 +621,19 @@ public class ForumApi {
                 marker = postDatas[posts.size() - 1].getPath();
             }
             if (sort.equals("parent_tree")) {
-                marker = postDatas[posts.size() - 1].getPath();
+                marker = postDatas[posts.size() - 1].getPath().split(",")[0];
+                if (marker.charAt(0) == '{') {
+                    marker = marker.substring(1);
+                }
+                if (marker.charAt(marker.length() - 1) == '}') {
+                    marker = marker.substring(0, marker.length() - 1);
+                }
+                if (marker.charAt(0) == '"') {
+                    marker = marker.substring(1);
+                }
+                if (marker.charAt(marker.length() - 1) == '"') {
+                    marker = marker.substring(0, marker.length() - 1);
+                }
             }
         }
 
