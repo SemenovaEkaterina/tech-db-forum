@@ -273,7 +273,7 @@ public class ForumApi {
                     new Object[]{request.size()},
                     Integer.class);
 
-            System.out.println(ids.get(0));
+            //System.out.println(ids.get(0));
 
 
             DataSource src = jdbcTemplate.getDataSource();

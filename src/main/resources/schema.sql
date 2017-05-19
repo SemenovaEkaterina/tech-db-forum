@@ -101,4 +101,9 @@ CREATE INDEX IF NOT EXISTS idx_forum_thread_author_forum ON forum_thread(author,
 CREATE INDEX IF NOT EXISTS idx_forum_post_path1 ON forum_post((path[1]));
 CREATE INDEX IF NOT EXISTS idx_forum_thread_slug_id ON forum_thread(citext(slug), id);
 
-CREATE INDEX IF NOT EXISTS idx_forum_post_thread_path_parent_id ON forum_post(thread, path, parent, id);
+CREATE INDEX IF NOT EXISTS idx_forum_post_thread_parent_id ON forum_post(thread, parent, id);
+CREATE INDEX IF NOT EXISTS idx_forum_post_thread_parent_id ON forum_post(thread, path, id);
+
+VACUUM;
+
+

@@ -1,0 +1,4 @@
+SHELL=/bin/bash
+*/5 * * * * root vacuumdb docker
+*/5 * * * * root echo "vacuum" >> /var/log/cron.log 2>&1
+
