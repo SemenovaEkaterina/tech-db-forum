@@ -49,14 +49,7 @@ ENV WORK /opt/tech-db-forum
 ADD src/ $WORK/src/
 ADD pom.xml $WORK/
 
-
-
 WORKDIR $WORK/
-RUN apt-get install -y cron
-ADD tab /etc/cron.d/vacuum-cron
-RUN chmod 0644 /etc/cron.d/vacuum-cron
-RUN touch /var/log/cron.log
-CMD cron && tail -f /var/log/cron.log
 
 # Собираем и устанавливаем пакет
 RUN mvn compile
