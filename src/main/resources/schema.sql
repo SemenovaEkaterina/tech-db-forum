@@ -54,8 +54,7 @@ CREATE TABLE IF NOT EXISTS forum_post (
 /*DROP TABLE IF EXISTS forum_f_u CASCADE;*/
 CREATE TABLE IF NOT EXISTS forum_f_u (
     forum_id integer NOT NULL REFERENCES forum_forum(id),
-    user_id integer NOT NULL REFERENCES forum_user(id),
-    CONSTRAINT unique_forum_user UNIQUE(forum_id, user_id)
+    user_id integer NOT NULL REFERENCES forum_user(id)
 );
 
 CREATE TABLE IF NOT EXISTS forum_stat (
@@ -68,15 +67,14 @@ CREATE TABLE IF NOT EXISTS forum_stat (
 CREATE OR REPLACE FUNCTION new_thread() RETURNS TRIGGER AS '
     BEGIN
     INSERT INTO forum_stat (forum_id, threads) VALUES (NEW.forum, 1) ON CONFLICT (forum_id) DO UPDATE SET threads = forum_stat.threads + 1;
-    INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author) ON CONFLICT (forum_id, user_id) DO NOTHING;
+    INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author);
     RETURN NEW;
     END
     ' LANGUAGE plpgsql;
 
 CREATE OR REPLACE FUNCTION new_post() RETURNS TRIGGER AS '
     BEGIN
-    INSERT INTO forum_stat (forum_id, posts) VALUES (NEW.forum, 1) ON CONFLICT (forum_id) DO UPDATE SET posts = forum_stat.posts + 1;
-    INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author) ON CONFLICT (forum_id, user_id) DO NOTHING;
+    INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author);
     RETURN NEW;
     END
     ' LANGUAGE plpgsql;
@@ -138,5 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_forum_post_parent_thread_id ON forum_post(parent,
 CREATE INDEX IF NOT EXISTS idx_forum_post_thread_id ON forum_post(thread, id);
 
 CREATE INDEX IF NOT EXISTS idx_forum_forum_slug_id ON forum_forum(citext(slug), id);
+
+CREATE INDEX IF NOT EXISTS idx_forum_forum_f_u_user_id ON forum_f_u(user_id);
 
 

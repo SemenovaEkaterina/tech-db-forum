@@ -252,21 +252,27 @@ public class ForumApi {
             id = null;
         }
 
-        if (request.isEmpty()) {
-            Integer count = (int)jdbcTemplate.queryForObject("SELECT COUNT(*) FROM forum_thread WHERE id=? OR slug=?::citext;",
-                    new Object[] {id, slug_or_id},
-                    Integer.class);
 
-            if (count.equals(0)) {
-                return ResponseEntity.status(404)
-                        .body(null);
-            }
-
-        }
+        
 
         java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
 
         try {
+
+            List<Integer> thread_ids = jdbcTemplate.queryForList("SELECT id FROM forum_thread WHERE slug=?::citext OR id=?;",
+                new Object[] {slug_or_id, id},
+                Integer.class);
+            
+            if (thread_ids.size() == 0) {
+                return ResponseEntity.status(404)
+                           .body(null);
+            }
+            id = thread_ids.get(0);
+
+            Integer forum_id = (int)jdbcTemplate.queryForObject("SELECT forum FROM forum_thread WHERE id=?;",
+                    new Object[] {id},
+                    Integer.class);
+            
             List<Integer> ids = jdbcTemplate.queryForList("SELECT nextval('forum_post_id_seq') from generate_series(1,?);",
                     new Object[]{request.size()},
                     Integer.class);
@@ -278,42 +284,33 @@ public class ForumApi {
             Connection c = src.getConnection();
 
             String query = "INSERT INTO forum_post as p1 (id, author, forum, message, parent, thread, isedited, created, path)" +
-                    "SELECT ?, u.id, t.forum, ?, p.id, (CASE WHEN ? is null THEN t.id ELSE p.thread END), FALSE, ?::TIMESTAMP, array_append(p.path, ?)" +
-                    " FROM forum_thread t\n" +
-                    "LEFT JOIN forum_post p ON (p.id=? AND p.thread=t.id),\n" +
-                    "forum_user u\n" +
-                    "WHERE (u.nickname = ?::citext) AND\n" +
-                    "(t.id = ? OR t.slug=?::citext)";
+                    "SELECT ?, u.id, ?, ?, p.id, (CASE WHEN ? is null THEN ? ELSE p.thread END), FALSE, ?::TIMESTAMP, array_append(p.path, ?)" +
+                    " FROM forum_user u\n" +
+                    "LEFT JOIN forum_post p ON (p.id=? AND p.thread=?)\n" +
+                    "WHERE (u.nickname = ?::citext);\n";
 
 
             PreparedStatement pStatement = c.prepareStatement(query, Statement.NO_GENERATED_KEYS);
 
             for (int count = 0; count < request.size(); count++) {
-                pStatement.setString(2, request.get(count).getMessage());
+                pStatement.setInt(2, forum_id);
+                pStatement.setString(3, request.get(count).getMessage());
                 if (request.get(count).getParent() == null) {
-                    pStatement.setNull(3, java.sql.Types.INTEGER);
-                    pStatement.setNull(6, java.sql.Types.INTEGER);
-                }
-                else {
-                    pStatement.setInt(3, request.get(count).getParent());
-                    pStatement.setInt(6, request.get(count).getParent());
-                }
-                pStatement.setTimestamp(4, now_t);
-                pStatement.setString(7, request.get(count).getAuthor());
-                if (id == null) {
+                    pStatement.setNull(4, java.sql.Types.INTEGER);
                     pStatement.setNull(8, java.sql.Types.INTEGER);
                 }
                 else {
-                    pStatement.setInt(8, id);
+                    pStatement.setInt(4, request.get(count).getParent());
+                    pStatement.setInt(8, request.get(count).getParent());
                 }
-                if (slug_or_id == null) {
-                    pStatement.setNull(9, java.sql.Types.INTEGER);
-                }
-                else {
-                    pStatement.setString(9, slug_or_id);
-                }
+                pStatement.setTimestamp(6, now_t);
+                pStatement.setString(10, request.get(count).getAuthor());
+
+                pStatement.setInt(5, id);
+                pStatement.setInt(9, id);
+              
                 pStatement.setInt(1, ids.get(count));
-                pStatement.setInt(5, ids.get(count));
+                pStatement.setInt(7, ids.get(count));
 
                 pStatement.addBatch();
             }
@@ -342,13 +339,23 @@ public class ForumApi {
 
         }
         catch (DataIntegrityViolationException e) {
+            System.out.println(e);
             return ResponseEntity.status(409)
                     .body(null);
         }
         catch (SQLException e) {
+            System.out.println(e);
             return ResponseEntity.status(409)
                     .body(null);
         }
+
+	
+        Integer forum_id = jdbcTemplate.queryForObject("SELECT id FROM forum_forum WHERE slug=?::citext;",
+                new Object[] {curPosts.get(0).getForum()},
+                Integer.class);
+        
+        jdbcTemplate.update("INSERT INTO forum_stat (forum_id, posts) VALUES (?, 1) ON CONFLICT (forum_id) DO UPDATE SET posts = forum_stat.posts + ?;",
+                             new Object[]{forum_id, curPosts.size()});
 
         PostData postDatas[] = new PostData[curPosts.size()];
 
