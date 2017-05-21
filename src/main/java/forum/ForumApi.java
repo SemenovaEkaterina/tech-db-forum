@@ -253,13 +253,7 @@ public class ForumApi {
         }
 
 
-        
-
-        java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
-
-        try {
-
-            List<Integer> thread_ids = jdbcTemplate.queryForList("SELECT id FROM forum_thread WHERE slug=?::citext OR id=?;",
+        List<Integer> thread_ids = jdbcTemplate.queryForList("SELECT id FROM forum_thread WHERE slug=?::citext OR id=?;",
                 new Object[] {slug_or_id, id},
                 Integer.class);
             
@@ -272,7 +266,12 @@ public class ForumApi {
             Integer forum_id = (int)jdbcTemplate.queryForObject("SELECT forum FROM forum_thread WHERE id=?;",
                     new Object[] {id},
                     Integer.class);
-            
+        
+
+        java.sql.Timestamp now_t = new java.sql.Timestamp(new java.util.Date().getTime());
+
+        try {
+
             List<Integer> ids = jdbcTemplate.queryForList("SELECT nextval('forum_post_id_seq') from generate_series(1,?);",
                     new Object[]{request.size()},
                     Integer.class);
@@ -339,20 +338,15 @@ public class ForumApi {
 
         }
         catch (DataIntegrityViolationException e) {
-            System.out.println(e);
+            //System.out.println(e);
             return ResponseEntity.status(409)
                     .body(null);
         }
         catch (SQLException e) {
-            System.out.println(e);
+            //System.out.println(e);
             return ResponseEntity.status(409)
                     .body(null);
         }
-
-	
-        Integer forum_id = jdbcTemplate.queryForObject("SELECT id FROM forum_forum WHERE slug=?::citext;",
-                new Object[] {curPosts.get(0).getForum()},
-                Integer.class);
         
         jdbcTemplate.update("INSERT INTO forum_stat (forum_id, posts) VALUES (?, 1) ON CONFLICT (forum_id) DO UPDATE SET posts = forum_stat.posts + ?;",
                              new Object[]{forum_id, curPosts.size()});
