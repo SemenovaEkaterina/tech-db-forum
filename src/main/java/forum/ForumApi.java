@@ -115,9 +115,10 @@ public class ForumApi {
 
     @GetMapping(path = "/api/forum/{slug}/details", produces="application/json")
     public ResponseEntity getForum(@PathVariable String slug) {
-        List<Forum> forums = jdbcTemplate.query("SELECT f.id, f.slug, f.title, u.nickname as user, f.threads, f.posts\n" +
+        List<Forum> forums = jdbcTemplate.query("SELECT f.id, f.slug, f.title, u.nickname as user, (CASE WHEN s.threads is null THEN 0 ELSE s.threads END), (CASE WHEN s.posts is null THEN 0 ELSE s.posts END)\n" +
                         "FROM forum_forum f \n" +
                         "JOIN forum_user u ON(f.forum_user=u.id)\n" +
+                        "LEFT JOIN forum_stat s ON(f.id=s.forum_id)\n" +
                         "WHERE slug=?::citext;",
                 new Object[]{slug},
                 new BeanPropertyRowMapper(Forum.class));
@@ -689,6 +690,8 @@ public class ForumApi {
                 new Object[]{});
         jdbcTemplate.update("TRUNCATE TABLE forum_vote CASCADE;",
                 new Object[]{});
+        jdbcTemplate.update("TRUNCATE TABLE forum_stat CASCADE;",
+                new Object[]{});
 
         return ResponseEntity.status(200)
                 .body(null);
@@ -822,9 +825,10 @@ public class ForumApi {
         }
 
         if (related != null && related.contains("forum")) {
-            sql = "SELECT f.id, f.slug, f.title, u.nickname as user, f.threads, f.posts\n" +
+            sql = "SELECT f.id, f.slug, f.title, u.nickname as user, (CASE WHEN s.threads is null THEN 0 ELSE s.threads END), (CASE WHEN s.posts is null THEN 0 ELSE s.posts END)\n" +
                     "FROM forum_forum f \n" +
                     "JOIN forum_user u ON(f.forum_user=u.id)\n" +
+                    "LEFT JOIN forum_stat s ON(f.id=s.forum_id)\n" +
                     "WHERE slug=?::citext;";
             List<Forum> forums = jdbcTemplate.query(sql,
                     new Object[]{posts.get(0).getForum()},

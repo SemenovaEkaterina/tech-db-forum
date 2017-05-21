@@ -15,9 +15,7 @@ CREATE TABLE IF NOT EXISTS forum_forum (
     id SERIAL PRIMARY KEY,
     slug citext NOT NULL UNIQUE,
     forum_user integer NOT NULL REFERENCES forum_user(id),
-    title character varying NOT NULL,
-    threads integer DEFAULT 0,
-    posts integer DEFAULT 0
+    title character varying NOT NULL
 );
 
 /*DROP TABLE IF EXISTS forum_thread CASCADE;*/
@@ -60,9 +58,16 @@ CREATE TABLE IF NOT EXISTS forum_f_u (
     CONSTRAINT unique_forum_user UNIQUE(forum_id, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS forum_stat (
+    forum_id integer NOT NULL REFERENCES forum_forum(id),
+    threads integer DEFAULT 0,
+    posts integer DEFAULT 0,
+    CONSTRAINT unique_forum_stat UNIQUE(forum_id)
+);
+
 CREATE OR REPLACE FUNCTION new_thread() RETURNS TRIGGER AS '
     BEGIN
-    UPDATE forum_forum SET threads = threads + 1 WHERE NEW.forum=forum_forum.id;
+    INSERT INTO forum_stat (forum_id, threads) VALUES (NEW.forum, 1) ON CONFLICT (forum_id) DO UPDATE SET threads = forum_stat.threads + 1;
     INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author) ON CONFLICT (forum_id, user_id) DO NOTHING;
     RETURN NEW;
     END
@@ -70,7 +75,7 @@ CREATE OR REPLACE FUNCTION new_thread() RETURNS TRIGGER AS '
 
 CREATE OR REPLACE FUNCTION new_post() RETURNS TRIGGER AS '
     BEGIN
-    UPDATE forum_forum SET posts = posts + 1 WHERE NEW.forum=forum_forum.id;
+    INSERT INTO forum_stat (forum_id, posts) VALUES (NEW.forum, 1) ON CONFLICT (forum_id) DO UPDATE SET posts = forum_stat.posts + 1;
     INSERT INTO forum_f_u (forum_id, user_id) VALUES (NEW.forum, NEW.author) ON CONFLICT (forum_id, user_id) DO NOTHING;
     RETURN NEW;
     END
