@@ -139,4 +139,6 @@ CREATE INDEX IF NOT EXISTS idx_forum_forum_slug_id ON forum_forum(citext(slug), 
 
 CREATE INDEX IF NOT EXISTS idx_forum_forum_f_u_user_id ON forum_f_u(user_id);
 
+CREATE INDEX IF NOT EXISTS idx_forum_post_thread_path_id ON forum_post(thread, path, id);
+
 
